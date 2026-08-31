@@ -3,6 +3,9 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, timezone
 
+from reddit_connector import get_reddit_client, fetch_reddit_data
+from telegram_connector import get_telegram_client, fetch_telegram_data
+
 st.set_page_config(page_title="X Early Attention Monitor V1.5", layout="wide")
 st.title("X Early Attention Monitor — Version 1.5")
 st.caption("Early-attention research prototype with uploaded data analysis, watchlists, and alert queues.")
@@ -59,11 +62,76 @@ def calculate(df):
     return d
 
 st.sidebar.header("Data source")
-mode=st.sidebar.radio("Choose mode",["Demo data","Upload collected data"])
+mode=st.sidebar.radio("Choose mode",["Demo data","Upload collected data","Reddit (live)","Telegram (live)"])
 uploaded=None
+raw=None
+
 if mode=="Upload collected data":
     uploaded=st.sidebar.file_uploader("Upload CSV",type=["csv"])
-raw=pd.read_csv(uploaded) if uploaded is not None else demo
+    raw=pd.read_csv(uploaded) if uploaded is not None else demo
+
+elif mode=="Reddit (live)":
+    st.sidebar.caption("Uses Reddit's official read-only API (praw). Free app registration at reddit.com/prefs/apps.")
+    r_client_id=st.sidebar.text_input("Reddit client_id", type="password")
+    r_client_secret=st.sidebar.text_input("Reddit client_secret", type="password")
+    r_topics=st.sidebar.text_input("Topics (comma-separated)", value="")
+    r_subs=st.sidebar.text_input("Subreddits, optional (comma-separated)", value="")
+    r_hours=st.sidebar.slider("Hours back", 1, 168, 24)
+    r_fetch=st.sidebar.button("Fetch Reddit data")
+    if r_fetch:
+        if not r_client_id or not r_client_secret or not r_topics:
+            st.sidebar.error("client_id, client_secret, and at least one topic are required.")
+            raw=demo
+        else:
+            try:
+                reddit=get_reddit_client(r_client_id, r_client_secret)
+                topics=[t.strip() for t in r_topics.split(",") if t.strip()]
+                subs=[s.strip() for s in r_subs.split(",") if s.strip()] or None
+                raw=fetch_reddit_data(reddit, topics, subreddits=subs, hours_back=r_hours)
+                if raw.empty:
+                    st.sidebar.warning("No matching Reddit posts found in that window.")
+                    raw=demo
+                else:
+                    st.session_state["reddit_raw"]=raw
+            except Exception as e:
+                st.sidebar.error(f"Reddit fetch failed: {e}")
+                raw=demo
+    else:
+        raw=st.session_state.get("reddit_raw", demo)
+
+elif mode=="Telegram (live)":
+    st.sidebar.caption("Uses Telegram's official API (telethon) to read PUBLIC channels only. Free credentials at my.telegram.org.")
+    t_api_id=st.sidebar.text_input("Telegram api_id", type="password")
+    t_api_hash=st.sidebar.text_input("Telegram api_hash", type="password")
+    t_session=st.sidebar.text_input("Saved session string", type="password", help="Generate once locally with generate_session_string() — see telegram_connector.py")
+    t_topics=st.sidebar.text_input("Topics (comma-separated)", value="")
+    t_channels=st.sidebar.text_input("Public channels (comma-separated)", value="")
+    t_hours=st.sidebar.slider("Hours back", 1, 168, 24, key="t_hours")
+    t_fetch=st.sidebar.button("Fetch Telegram data")
+    if t_fetch:
+        if not t_api_id or not t_api_hash or not t_session or not t_topics or not t_channels:
+            st.sidebar.error("api_id, api_hash, session string, topics, and channels are all required.")
+            raw=demo
+        else:
+            try:
+                client=get_telegram_client(int(t_api_id), t_api_hash, t_session)
+                topics=[t.strip() for t in t_topics.split(",") if t.strip()]
+                channels=[c.strip() for c in t_channels.split(",") if c.strip()]
+                raw=fetch_telegram_data(client, topics, channels, hours_back=t_hours)
+                if raw.empty:
+                    st.sidebar.warning("No matching Telegram messages found in that window.")
+                    raw=demo
+                else:
+                    st.session_state["telegram_raw"]=raw
+            except Exception as e:
+                st.sidebar.error(f"Telegram fetch failed: {e}")
+                raw=demo
+    else:
+        raw=st.session_state.get("telegram_raw", demo)
+
+else:
+    raw=demo
+
 if mode=="Demo data": st.sidebar.info("Demo mode: synthetic data, not live X data.")
 
 required={"time","topic","mentions","unique_accounts","engagement","influencer_event"}
