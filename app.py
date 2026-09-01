@@ -3,37 +3,52 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, timezone
 
-from reddit_connector import get_reddit_client, fetch_reddit_data
-from telegram_connector import get_telegram_client, fetch_telegram_data
+st.set_page_config(page_title="X Early Attention Monitor V1.6", layout="wide")
+st.title("X Early Attention Monitor — Version 1.6")
+st.caption("Collector-ready architecture: raw events → aggregation → attention analysis → alerts")
 
-st.set_page_config(page_title="X Early Attention Monitor V1.5", layout="wide")
-st.title("X Early Attention Monitor — Version 1.5")
-st.caption("Early-attention research prototype with uploaded data analysis, watchlists, and alert queues.")
+REQUIRED = ["time","topic","mentions","unique_accounts","engagement","influencer_event"]
 
-# Demo data
-times = pd.date_range("2024-10-30 10:00", periods=24, freq="h")
-demo = pd.DataFrame({
-    "time": list(times)*4,
-    "topic": ["Squirrel"]*24 + ["Slow Growth"]*24 + ["Stable Topic"]*24 + ["Burst Then Fade"]*24,
-    "mentions": [3,4,4,5,5,6,7,8,10,13,17,22,29,38,50,65,82,102,126,154,185,220,260,305] + [8,9,10,11,12,13,15,16,18,20,22,24,26,29,32,35,38,41,44,47,50,53,56,59] + [50,51,49,52,50,51,50,52,51,53,52,51,53,52,54,53,52,54,53,55,54,53,55,54] + [4,5,7,12,22,38,60,88,120,150,165,170,165,150,132,115,98,83,70,60,52,46,41,37],
-    "unique_accounts": [3,3,4,4,5,5,6,7,8,10,13,17,22,29,38,49,62,77,93,111,130,152,176,202] + [7,8,8,9,9,10,11,12,13,14,15,16,17,19,20,22,24,25,27,29,31,33,35,37] + [32,33,32,34,33,34,33,35,34,36,35,34,36,35,37,36,35,37,36,38,37,36,38,37] + [4,5,6,10,18,30,45,63,82,98,108,112,108,99,88,77,67,58,51,45,40,36,33,30],
-    "engagement": [15,18,19,23,26,30,36,44,55,72,95,128,172,230,305,400,515,650,820,1010,1230,1500,1800,2150] + [80,84,88,92,97,103,110,118,126,135,145,155,166,178,190,203,217,231,246,262,278,295,313,332] + [500,510,490,515,505,520,510,525,515,530,520,515,535,525,540,530,520,545,535,550,540,530,550,540] + [20,25,40,75,150,280,500,800,1150,1500,1750,1900,1850,1700,1500,1300,1120,960,820,700,600,520,460,410],
-    "influencer_event": [0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0] + [0]*24 + [0]*24 + [0,0,0,0,0,0,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]
-})
+def demo_data():
+    t=pd.date_range("2024-10-30 10:00",periods=12,freq="h")
+    return pd.DataFrame({
+        "time":list(t)*3,
+        "topic":["Squirrel"]*12+["Slow Growth"]*12+["Burst Then Fade"]*12,
+        "mentions":[3,4,6,8,13,22,38,65,102,154,220,305]+[8,9,11,13,16,20,24,29,35,41,50,59]+[4,7,22,60,120,165,170,150,115,83,60,37],
+        "unique_accounts":[3,4,5,7,10,17,29,49,77,111,152,202]+[7,8,9,10,12,14,16,19,22,25,31,37]+[4,6,18,45,82,108,112,99,77,58,45,30],
+        "engagement":[15,19,30,44,72,128,230,400,650,1010,1500,2150]+[80,88,103,118,135,155,178,203,231,262,295,332]+[20,40,150,500,1150,1750,1900,1700,1300,960,700,410],
+        "influencer_event":[0,0,0,0,0,0,1,0,0,0,0,0]+[0]*12+[0,0,0,0,1,1,1,0,0,0,0,0]
+    })
 
 def norm(s):
-    s = pd.to_numeric(s, errors="coerce").fillna(0).clip(lower=0)
-    if len(s)==0 or s.max()<=0: return pd.Series(np.zeros(len(s)), index=s.index)
-    cap = s.quantile(.95)
-    if cap<=0: cap=s.max()
-    return (s.clip(upper=cap)/cap*100).clip(0,100)
+    s=pd.to_numeric(s,errors="coerce").fillna(0).clip(lower=0)
+    if s.max()<=0:return pd.Series(np.zeros(len(s)),index=s.index)
+    q=s.quantile(.95)
+    if q<=0:q=s.max()
+    return (s.clip(upper=q)/q*100).clip(0,100)
+
+def aggregate_events(e):
+    e=e.copy()
+    if "time" not in e.columns or "topic" not in e.columns:
+        raise ValueError("Raw events require time and topic columns")
+    e["time"]=pd.to_datetime(e["time"],errors="coerce",utc=True)
+    e=e.dropna(subset=["time"])
+    if "author_id" not in e.columns:e["author_id"]="unknown"
+    if "engagement" not in e.columns:e["engagement"]=0
+    if "influencer_event" not in e.columns:e["influencer_event"]=0
+    e["bucket"]=e["time"].dt.floor("h")
+    return e.groupby(["bucket","topic"],as_index=False).agg(
+        mentions=("topic","size"),
+        unique_accounts=("author_id","nunique"),
+        engagement=("engagement","sum"),
+        influencer_event=("influencer_event","max")
+    ).rename(columns={"bucket":"time"})
 
 def calculate(df):
     d=df.copy()
     d["time"]=pd.to_datetime(d["time"],errors="coerce",utc=True)
     d=d.dropna(subset=["time"]).sort_values(["topic","time"]).reset_index(drop=True)
-    d["topic"]=d["topic"].astype(str)
-    for c in ["mentions","unique_accounts","engagement","influencer_event"]:
+    for c in REQUIRED[2:]:
         d[c]=pd.to_numeric(d[c],errors="coerce").fillna(0).clip(lower=0)
     g=d.groupby("topic")
     d["mention_velocity"]=g["mentions"].diff().fillna(0)
@@ -41,163 +56,99 @@ def calculate(df):
     d["unique_velocity"]=g["unique_accounts"].diff().fillna(0)
     d["unique_acceleration"]=g["unique_velocity"].diff().fillna(0)
     d["engagement_growth"]=g["engagement"].pct_change().replace([np.inf,-np.inf],np.nan).fillna(0)
-    d["mention_baseline"]=g["mentions"].transform(lambda s:s.shift(1).rolling(6,min_periods=3).mean())
-    d["mention_baseline_std"]=g["mentions"].transform(lambda s:s.shift(1).rolling(6,min_periods=3).std()).fillna(0)
-    d["mention_anomaly"]=((d["mentions"]-d["mention_baseline"])/d["mention_baseline_std"].replace(0,np.nan)).replace([np.inf,-np.inf],np.nan).fillna(0)
-    d["unique_ratio"]=(d["unique_accounts"]/d["mentions"].replace(0,np.nan)).fillna(0).clip(0,1)
-    d["acceleration_component"]=g["mention_acceleration"].transform(norm)
-    d["velocity_component"]=g["mention_velocity"].transform(norm)
-    d["unique_acceleration_component"]=g["unique_acceleration"].transform(norm)
-    d["unique_component"]=g["unique_velocity"].transform(norm)
-    d["engagement_component"]=g["engagement_growth"].transform(norm)
-    d["anomaly_component"]=d["mention_anomaly"].clip(0,5)/5*100
-    d["breadth_component"]=d["unique_ratio"]*100
-    d["influencer_component"]=d["influencer_event"].clip(0,1)*100
-    raw=.30*d["acceleration_component"]+.18*d["velocity_component"]+.15*d["unique_acceleration_component"]+.10*d["unique_component"]+.10*d["anomaly_component"]+.08*d["engagement_component"]+.05*d["breadth_component"]+.04*d["influencer_component"]
-    d["early_wave_score"]=(raw*(1+.15/(1+np.log1p(d["mentions"])))).clip(0,100)
-    d["positive_signals"]=((d["mention_acceleration"]>0).astype(int)+(d["unique_acceleration"]>0).astype(int)+(d["engagement_growth"]>.15).astype(int)+(d["mention_anomaly"]>1.5).astype(int)+(d["influencer_event"]>0).astype(int))
-    d["signal_quality"]=np.select([d["positive_signals"]>=4,d["positive_signals"]>=3,d["positive_signals"]>=2],["STRONG","GOOD","WEAK"],default="LOW")
-    d["stage"]=np.select([(d["mentions"]<=30)&(d["mention_acceleration"]>0),(d["mentions"]<=100)&(d["mention_acceleration"]>0),d["mention_acceleration"]>0],["EARLY","GROWING","LATE GROWTH"],default="QUIET")
-    d["alert"]=np.select([(d["early_wave_score"]>=70)&d["signal_quality"].isin(["STRONG","GOOD"]),d["early_wave_score"]>=50,d["early_wave_score"]>=30],["EARLY WAVE","WATCH","BUILDING"],default="NORMAL")
+    d["baseline"]=g["mentions"].transform(lambda s:s.shift(1).rolling(4,min_periods=3).mean())
+    d["baseline_std"]=g["mentions"].transform(lambda s:s.shift(1).rolling(4,min_periods=3).std()).fillna(0)
+    d["anomaly"]=((d["mentions"]-d["baseline"])/d["baseline_std"].replace(0,np.nan)).replace([np.inf,-np.inf],np.nan).fillna(0)
+    d["accel_c"]=g["mention_acceleration"].transform(norm)
+    d["vel_c"]=g["mention_velocity"].transform(norm)
+    d["unique_accel_c"]=g["unique_acceleration"].transform(norm)
+    d["eng_c"]=g["engagement_growth"].transform(norm)
+    d["anomaly_c"]=d["anomaly"].clip(0,5)/5*100
+    d["influencer_c"]=d["influencer_event"].clip(0,1)*100
+    raw=.32*d["accel_c"]+.20*d["vel_c"]+.16*d["unique_accel_c"]+.12*d["anomaly_c"]+.12*d["eng_c"]+.08*d["influencer_c"]
+    d["score"]=(raw*(1+.12/(1+np.log1p(d["mentions"])))).clip(0,100)
+    d["signals"]=((d["mention_acceleration"]>0).astype(int)+(d["unique_acceleration"]>0).astype(int)+(d["engagement_growth"]>.15).astype(int)+(d["anomaly"]>1.5).astype(int)+(d["influencer_event"]>0).astype(int))
+    d["quality"]=np.select([d["signals"]>=4,d["signals"]>=3,d["signals"]>=2],["STRONG","GOOD","WEAK"],default="LOW")
+    d["stage"]=np.select([(d["mentions"]<=30)&(d["mention_acceleration"]>0),(d["mentions"]<=100)&(d["mention_acceleration"]>0),d["mention_acceleration"]>0],["EARLY","GROWING","LATE"],default="QUIET")
+    d["alert"]=np.select([(d["score"]>=70)&d["quality"].isin(["STRONG","GOOD"]),d["score"]>=50,d["score"]>=30],["EARLY WAVE","WATCH","BUILDING"],default="NORMAL")
     return d
 
-st.sidebar.header("Data source")
-mode=st.sidebar.radio("Choose mode",["Demo data","Upload collected data","Reddit (live)","Telegram (live)"])
+st.sidebar.header("V1.6 Data Pipeline")
+mode=st.sidebar.radio("Input mode",["Demo aggregated data","Upload aggregated CSV","Upload raw event CSV"])
 uploaded=None
-raw=None
+if mode=="Upload aggregated CSV":
+    uploaded=st.sidebar.file_uploader("Upload aggregated CSV",type=["csv"],key="a")
+elif mode=="Upload raw event CSV":
+    uploaded=st.sidebar.file_uploader("Upload raw events CSV",type=["csv"],key="r")
 
-if mode=="Upload collected data":
-    uploaded=st.sidebar.file_uploader("Upload CSV",type=["csv"])
-    raw=pd.read_csv(uploaded) if uploaded is not None else demo
-
-elif mode=="Reddit (live)":
-    st.sidebar.caption("Uses Reddit's official read-only API (praw). Free app registration at reddit.com/prefs/apps.")
-    r_client_id=st.sidebar.text_input("Reddit client_id", type="password")
-    r_client_secret=st.sidebar.text_input("Reddit client_secret", type="password")
-    r_topics=st.sidebar.text_input("Topics (comma-separated)", value="")
-    r_subs=st.sidebar.text_input("Subreddits, optional (comma-separated)", value="")
-    r_hours=st.sidebar.slider("Hours back", 1, 168, 24)
-    r_fetch=st.sidebar.button("Fetch Reddit data")
-    if r_fetch:
-        if not r_client_id or not r_client_secret or not r_topics:
-            st.sidebar.error("client_id, client_secret, and at least one topic are required.")
-            raw=demo
-        else:
-            try:
-                reddit=get_reddit_client(r_client_id, r_client_secret)
-                topics=[t.strip() for t in r_topics.split(",") if t.strip()]
-                subs=[s.strip() for s in r_subs.split(",") if s.strip()] or None
-                raw=fetch_reddit_data(reddit, topics, subreddits=subs, hours_back=r_hours)
-                if raw.empty:
-                    st.sidebar.warning("No matching Reddit posts found in that window.")
-                    raw=demo
-                else:
-                    st.session_state["reddit_raw"]=raw
-            except Exception as e:
-                st.sidebar.error(f"Reddit fetch failed: {e}")
-                raw=demo
-    else:
-        raw=st.session_state.get("reddit_raw", demo)
-
-elif mode=="Telegram (live)":
-    st.sidebar.caption("Uses Telegram's official API (telethon) to read PUBLIC channels only. Free credentials at my.telegram.org.")
-    t_api_id=st.sidebar.text_input("Telegram api_id", type="password")
-    t_api_hash=st.sidebar.text_input("Telegram api_hash", type="password")
-    t_session=st.sidebar.text_input("Saved session string", type="password", help="Generate once locally with generate_session_string() — see telegram_connector.py")
-    t_topics=st.sidebar.text_input("Topics (comma-separated)", value="")
-    t_channels=st.sidebar.text_input("Public channels (comma-separated)", value="")
-    t_hours=st.sidebar.slider("Hours back", 1, 168, 24, key="t_hours")
-    t_fetch=st.sidebar.button("Fetch Telegram data")
-    if t_fetch:
-        if not t_api_id or not t_api_hash or not t_session or not t_topics or not t_channels:
-            st.sidebar.error("api_id, api_hash, session string, topics, and channels are all required.")
-            raw=demo
-        else:
-            try:
-                client=get_telegram_client(int(t_api_id), t_api_hash, t_session)
-                topics=[t.strip() for t in t_topics.split(",") if t.strip()]
-                channels=[c.strip() for c in t_channels.split(",") if c.strip()]
-                raw=fetch_telegram_data(client, topics, channels, hours_back=t_hours)
-                if raw.empty:
-                    st.sidebar.warning("No matching Telegram messages found in that window.")
-                    raw=demo
-                else:
-                    st.session_state["telegram_raw"]=raw
-            except Exception as e:
-                st.sidebar.error(f"Telegram fetch failed: {e}")
-                raw=demo
-    else:
-        raw=st.session_state.get("telegram_raw", demo)
-
+if mode=="Demo aggregated data":
+    raw=demo_data(); label="Synthetic demo"
+elif uploaded is None:
+    st.info("Upload a CSV file to begin."); st.stop()
 else:
-    raw=demo
+    incoming=pd.read_csv(uploaded)
+    try:
+        raw=aggregate_events(incoming) if mode=="Upload raw event CSV" else incoming
+        label="Raw events automatically aggregated" if mode=="Upload raw event CSV" else "Uploaded aggregated data"
+    except Exception as e:
+        st.error(str(e)); st.stop()
 
-if mode=="Demo data": st.sidebar.info("Demo mode: synthetic data, not live X data.")
-
-required={"time","topic","mentions","unique_accounts","engagement","influencer_event"}
-missing=required-set(raw.columns)
+missing=[c for c in REQUIRED if c not in raw.columns]
 if missing:
-    st.error("Missing columns: "+", ".join(sorted(missing))); st.stop()
+    st.error("Missing columns: "+", ".join(missing)); st.stop()
 
 result=calculate(raw)
-latest=result.sort_values("time").groupby("topic",as_index=False).tail(1).sort_values("early_wave_score",ascending=False).reset_index(drop=True)
+latest=result.sort_values("time").groupby("topic",as_index=False).tail(1).sort_values("score",ascending=False).reset_index(drop=True)
 
-st.subheader("V1.5 Attention Radar")
+st.subheader("Pipeline Status")
 a,b,c,d=st.columns(4)
-a.metric("Topics monitored",len(latest))
-b.metric("Strong signals",int((latest["signal_quality"]=="STRONG").sum()))
-c.metric("Watchlist signals",int((latest["alert"]!="NORMAL").sum()))
-d.metric("Data rows",len(result))
-st.caption("Last calculation: "+datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"))
+a.metric("Input",label); b.metric("Topics",len(latest)); c.metric("Rows",len(result)); d.metric("Calculated",datetime.now(timezone.utc).strftime("%H:%M:%S UTC"))
 
-st.markdown("### Ranked early-attention watchlist")
-watch=latest[["topic","early_wave_score","signal_quality","stage","alert","mentions","mention_velocity","mention_acceleration","mention_anomaly","positive_signals"]].copy()
-watch["early_wave_score"]=watch["early_wave_score"].round(1)
-watch["mention_anomaly"]=watch["mention_anomaly"].round(2)
+st.markdown("**Architecture:** Authorized collector → Raw events → Hourly aggregation → Detection engine → Ranked alerts")
+
+st.subheader("Early Attention Watchlist")
+watch=latest[["topic","score","quality","stage","alert","mentions","mention_velocity","mention_acceleration","anomaly","signals"]].copy()
+watch["score"]=watch["score"].round(1); watch["anomaly"]=watch["anomaly"].round(2)
 st.dataframe(watch,use_container_width=True,hide_index=True)
 
-top=latest.iloc[0]
-st.markdown("### Current strongest signal")
-a,b,c,d,e=st.columns(5)
-a.metric("Topic",str(top["topic"])); b.metric("Score",f"{top['early_wave_score']:.0f}/100"); c.metric("Stage",str(top["stage"])); d.metric("Quality",str(top["signal_quality"])); e.metric("Alert",str(top["alert"]))
-
-selected=st.selectbox("Inspect a topic",latest["topic"].astype(str).tolist(),index=0)
-view=result[result["topic"].astype(str)==selected].copy()
-last=view.iloc[-1]
-st.markdown(f"## Topic Inspector: {selected}")
-a,b,c,d=st.columns(4)
-a.metric("Early-wave score",f"{last['early_wave_score']:.1f}/100"); b.metric("Mention velocity",f"{last['mention_velocity']:.1f}"); c.metric("Acceleration",f"{last['mention_acceleration']:.1f}"); d.metric("Baseline anomaly",f"{last['mention_anomaly']:.2f} sigma")
-st.write("**Stage:**",last["stage"]); st.write("**Signal quality:**",last["signal_quality"]); st.write("**Alert:**",last["alert"])
-
-st.markdown("### Attention components")
-st.line_chart(view.set_index("time")[["velocity_component","acceleration_component","unique_acceleration_component","anomaly_component"]])
-st.markdown("### Mentions vs baseline")
-st.line_chart(view.set_index("time")[["mentions","mention_baseline"]])
-st.markdown("### Conversation spread")
-st.line_chart(view.set_index("time")[["unique_accounts","engagement"]])
-
-st.markdown("### Alert queue")
+st.subheader("Active Alert Queue")
 alerts=latest[latest["alert"]!="NORMAL"]
-if alerts.empty: st.success("No active alerts in the current dataset.")
+if alerts.empty: st.success("No active alerts.")
 else:
-    for _,row in alerts.iterrows():
-        st.warning(f"{row['alert']} — {row['topic']} | Score {row['early_wave_score']:.1f} | {row['signal_quality']} | {row['stage']}")
+    for _,r in alerts.iterrows():
+        st.warning(f"{r['alert']} | {r['topic']} | Score {r['score']:.1f} | {r['quality']} | {r['stage']}")
 
-with st.expander("CSV format"):
-    st.markdown("""Required columns: `time`, `topic`, `mentions`, `unique_accounts`, `engagement`, `influencer_event`.
+selected=st.selectbox("Inspect topic",latest["topic"].astype(str).tolist())
+view=result[result["topic"].astype(str)==selected]
+last=view.iloc[-1]
+st.subheader(f"Topic Inspector — {selected}")
+a,b,c,d,e=st.columns(5)
+a.metric("Score",f"{last['score']:.1f}/100"); b.metric("Velocity",f"{last['mention_velocity']:.1f}"); c.metric("Acceleration",f"{last['mention_acceleration']:.1f}"); d.metric("Anomaly",f"{last['anomaly']:.2f}σ"); e.metric("Signals",f"{last['signals']}/5")
+st.write(f"**Stage:** {last['stage']} | **Quality:** {last['quality']} | **Alert:** {last['alert']}")
+st.line_chart(view.set_index("time")[["vel_c","accel_c","unique_accel_c","anomaly_c"]])
+st.markdown("### Mentions vs baseline")
+st.line_chart(view.set_index("time")[["mentions","baseline"]])
 
-Each row should represent one time interval for one topic. V1.5 analyzes uploaded data and does not scrape or bypass X access controls.""")
+with st.expander("Input formats"):
+    st.markdown("""**Aggregated CSV:** `time, topic, mentions, unique_accounts, engagement, influencer_event`
 
-template=pd.DataFrame(columns=["time","topic","mentions","unique_accounts","engagement","influencer_event"])
-st.download_button("Download CSV template",template.to_csv(index=False).encode(),"x_attention_input_template.csv","text/csv")
-st.download_button("Download V1.5 demo data",demo.to_csv(index=False).encode(),"x_attention_demo_v1_5.csv","text/csv")
+**Raw event CSV minimum:** `time, topic`
 
-st.subheader("What V1.5 adds")
-st.markdown("""- Upload mode for externally collected data
-- Ranked multi-topic watchlist
-- Alert queue
-- Dashboard metrics
-- CSV template
-- Clear separation between data collection and analysis
+Recommended raw columns: `author_id, engagement, influencer_event`
 
-Research prototype only. Scores are experimental and are not buy/sell recommendations.""")
+Raw events are automatically grouped into hourly topic metrics.""")
+
+agg_template=pd.DataFrame(columns=REQUIRED)
+raw_template=pd.DataFrame(columns=["time","topic","author_id","engagement","influencer_event"])
+st.download_button("Download aggregated CSV template",agg_template.to_csv(index=False).encode(),"aggregated_template.csv","text/csv")
+st.download_button("Download raw event CSV template",raw_template.to_csv(index=False).encode(),"raw_event_template.csv","text/csv")
+st.download_button("Download V1.6 demo data",demo_data().to_csv(index=False).encode(),"demo_v1_6.csv","text/csv")
+
+st.subheader("What V1.6 adds")
+st.markdown("""- Raw event input mode
+- Automatic hourly aggregation
+- Aggregated-data input mode
+- Collector-ready pipeline architecture
+- Same detector can work behind a future authorized data source
+
+This prototype does not scrape X, bypass access controls, or execute trades.""")
