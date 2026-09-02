@@ -1,92 +1,53 @@
-# Early Runner Intelligence V2.0
+# Early Runner Intelligence V2.1
 
-V2.0 extends the original X Early Attention Monitor into a multi-signal research system:
+V2.1 adds a **real Solana JSON-RPC data adapter** to V2.0.
 
-**Safety Gate → Elite Early-Runner Traders → Dev Wallet Intelligence → X Attention → Trader Convergence → Alert**
+## Live capability
 
-## What changed from V1.6
+Enter a Solana token mint and an RPC endpoint. The app queries:
+- `getAccountInfo` with parsed data
+- `getTokenSupply`
+- `getTokenLargestAccounts`
 
-- Added a hard Safety Gate.
-- Added elite early-runner trader scoring.
-- Added trader convergence detection.
-- Added dev/associated-wallet intelligence.
-- Kept the X attention engine.
-- Added a unified signal board.
-- Added explicit BLOCKED / WATCH / BUILDING / ALERT states.
-- Unknown or missing critical safety information is treated as a failure, not as a pass.
-- No trade execution.
+Solana documents these RPC account/token methods and their returned structures. The adapter uses the public RPC interface rather than scraping a trading terminal.
 
-## Important limitation
+## What V2.1 does NOT claim
 
-This version is **data-source ready**, not falsely presented as a live Axiom/FOMO feed.
+The basic RPC snapshot does not automatically prove:
+- liquidity amount
+- LP lock status/duration
+- sellability/honeypot status
+- wallet relationships / BubbleMaps-style clusters
+- wash trading
+- bundle/sniper behavior
+- historical dev performance
+- trader profitability
 
-It accepts CSV data so the architecture can be tested now. A later version can connect legitimate, authorized public/on-chain data sources. The app does not scrape X, bypass access controls, copy private platform APIs, or execute trades.
+Those need additional indexed/on-chain or specialized data sources.
 
-A token that passes the configured gate has only passed the supplied/configured checks. It is not guaranteed to be safe or profitable.
+## Safety philosophy
 
-## Run locally
+Missing critical data = **FAILED / BLOCKED**.
+
+A `PASSED` status means the configured checks passed; it never means the token is guaranteed safe or profitable.
+
+## Run
 
 ```bash
 pip install -r requirements.txt
 streamlit run app.py
 ```
 
-## CSV schemas
+## Next target: V2.2
 
-### Token Safety CSV
-
-Required:
-- token
-- liquidity_usd
-- lp_locked
-- lp_lock_days
-- mint_authority_active
-- freeze_authority_active
-- sellable
-- top10_holder_pct
-- dev_holder_pct
-- cluster_holder_pct
-
-Recommended:
-- wash_trade_risk
-- bundle_risk
-- dev_risk
-- contract_risk
-
-### Trader Trades CSV
-
-Required:
-- wallet
-- time
-- token
-- side
-- usd
-
-Recommended historical labels:
-- early_runner
-- win
-
-### X Attention CSV
-
-- time
-- topic
-- mentions
-- unique_accounts
-- engagement
-- influencer_event
-
-## Architecture
-
-1. Safety Gate
-2. Elite Early-Runner Trader Detection
-3. Dev/Associated Wallet Intelligence
-4. X Attention
-5. On-chain confirmation (future live adapter)
-6. Convergence Engine
-7. Alert
-
-## V2.0 philosophy
-
-The goal is not to find the token with the most attention.
-
-The goal is to find an **early opportunity with independent confirmation while blocking tokens that fail the safety gate**.
+The next build should add a proper indexed Solana transaction layer:
+1. token creation/deployer history
+2. wallet transaction history
+3. first-entry timing
+4. holder concentration over time
+5. DEX liquidity/pool discovery
+6. buy/sell flow and unique buyers
+7. bundle/sniper heuristics
+8. reusable wallet reputation database
+9. persistent scoring/history
+10. alerts
