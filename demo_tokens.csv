@@ -1,0 +1,4 @@
+token,liquidity_usd,lp_locked,lp_lock_days,mint_authority_active,freeze_authority_active,wash_trade_risk,bundle_risk,sellable,top10_holder_pct,dev_holder_pct,cluster_holder_pct,dev_risk,contract_risk
+ALPHA,125000,True,90,False,False,LOW,LOW,True,32,5,18,LOW,CLEAN
+BETA,18000,False,0,True,True,HIGH,HIGH,False,62,19,71,HIGH,SUSPICIOUS
+GAMMA,92000,True,45,False,False,LOW,LOW,True,37,7,24,LOW,CLEAN

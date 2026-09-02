@@ -1,154 +1,210 @@
 import streamlit as st
 import pandas as pd
-import numpy as np
-from datetime import datetime, timezone
+from detector import (
+    calculate_attention,
+    safety_gate,
+    trader_scores,
+    trader_convergence,
+    dev_history,
+    build_signal,
+)
 
-st.set_page_config(page_title="X Early Attention Monitor V1.6", layout="wide")
-st.title("X Early Attention Monitor — Version 1.6")
-st.caption("Collector-ready architecture: raw events → aggregation → attention analysis → alerts")
+st.set_page_config(page_title="Early Runner Intelligence V2.0", layout="wide")
+st.title("Early Runner Intelligence — V2.0")
+st.caption("Safety Gate → Elite Early-Runner Traders → Dev Wallet Intelligence → X Attention → Convergence → Alert")
 
-REQUIRED = ["time","topic","mentions","unique_accounts","engagement","influencer_event"]
+st.warning(
+    "Research prototype only. A PASSED token has passed the configured checks in the supplied data; "
+    "that is not a guarantee that the token is safe, legitimate, or profitable. "
+    "Unknown/unverified data is blocked by default. No trades are executed."
+)
 
+# ---------------- Demo data ----------------
 def demo_data():
-    t=pd.date_range("2024-10-30 10:00",periods=12,freq="h")
-    return pd.DataFrame({
-        "time":list(t)*3,
-        "topic":["Squirrel"]*12+["Slow Growth"]*12+["Burst Then Fade"]*12,
-        "mentions":[3,4,6,8,13,22,38,65,102,154,220,305]+[8,9,11,13,16,20,24,29,35,41,50,59]+[4,7,22,60,120,165,170,150,115,83,60,37],
-        "unique_accounts":[3,4,5,7,10,17,29,49,77,111,152,202]+[7,8,9,10,12,14,16,19,22,25,31,37]+[4,6,18,45,82,108,112,99,77,58,45,30],
-        "engagement":[15,19,30,44,72,128,230,400,650,1010,1500,2150]+[80,88,103,118,135,155,178,203,231,262,295,332]+[20,40,150,500,1150,1750,1900,1700,1300,960,700,410],
-        "influencer_event":[0,0,0,0,0,0,1,0,0,0,0,0]+[0]*12+[0,0,0,0,1,1,1,0,0,0,0,0]
-    })
+    tokens = pd.DataFrame([
+        ["ALPHA", 125000, True, 90, False, False, False, True, 32, 5, 18, "LOW", "CLEAN"],
+        ["BETA", 18000, False, 0, True, True, True, False, 62, 19, 71, "HIGH", "SUSPICIOUS"],
+        ["GAMMA", 92000, True, 45, False, False, False, True, 37, 7, 24, "LOW", "CLEAN"],
+    ], columns=[
+        "token","liquidity_usd","lp_locked","lp_lock_days","mint_authority_active",
+        "freeze_authority_active","wash_trade_risk","sellable","top10_holder_pct",
+        "dev_holder_pct","cluster_holder_pct","dev_risk","contract_risk"
+    ])
 
-def norm(s):
-    s=pd.to_numeric(s,errors="coerce").fillna(0).clip(lower=0)
-    if s.max()<=0:return pd.Series(np.zeros(len(s)),index=s.index)
-    q=s.quantile(.95)
-    if q<=0:q=s.max()
-    return (s.clip(upper=q)/q*100).clip(0,100)
+    trades = pd.DataFrame([
+        ["WALLET_A","2026-09-02 20:00","ALPHA","BUY",1800,True,True],
+        ["WALLET_B","2026-09-02 20:02","ALPHA","BUY",2400,True,True],
+        ["WALLET_C","2026-09-02 20:04","ALPHA","BUY",1500,True,True],
+        ["WALLET_D","2026-09-02 20:05","ALPHA","BUY",800,False,True],
+        ["WALLET_A","2026-09-02 20:18","GAMMA","BUY",1000,True,False],
+        ["WALLET_E","2026-09-02 20:20","GAMMA","BUY",900,True,True],
+        ["WALLET_X","2026-09-02 20:01","BETA","BUY",5000,False,False],
+    ], columns=["wallet","time","token","side","usd","early_runner","win"])
 
-def aggregate_events(e):
-    e=e.copy()
-    if "time" not in e.columns or "topic" not in e.columns:
-        raise ValueError("Raw events require time and topic columns")
-    e["time"]=pd.to_datetime(e["time"],errors="coerce",utc=True)
-    e=e.dropna(subset=["time"])
-    if "author_id" not in e.columns:e["author_id"]="unknown"
-    if "engagement" not in e.columns:e["engagement"]=0
-    if "influencer_event" not in e.columns:e["influencer_event"]=0
-    e["bucket"]=e["time"].dt.floor("h")
-    return e.groupby(["bucket","topic"],as_index=False).agg(
-        mentions=("topic","size"),
-        unique_accounts=("author_id","nunique"),
-        engagement=("engagement","sum"),
-        influencer_event=("influencer_event","max")
-    ).rename(columns={"bucket":"time"})
+    x = pd.DataFrame([
+        ["2026-09-02 20:00","ALPHA",3,3,120,0],
+        ["2026-09-02 20:01","ALPHA",5,4,210,1],
+        ["2026-09-02 20:02","ALPHA",9,7,420,1],
+        ["2026-09-02 20:03","ALPHA",15,11,700,2],
+        ["2026-09-02 20:04","ALPHA",24,16,1100,2],
+        ["2026-09-02 20:05","ALPHA",35,22,1700,3],
+        ["2026-09-02 20:06","ALPHA",48,29,2300,4],
+        ["2026-09-02 20:00","GAMMA",4,3,140,0],
+        ["2026-09-02 20:01","GAMMA",5,4,180,0],
+        ["2026-09-02 20:02","GAMMA",6,5,220,0],
+        ["2026-09-02 20:03","GAMMA",7,5,250,0],
+        ["2026-09-02 20:04","GAMMA",8,6,290,0],
+        ["2026-09-02 20:05","GAMMA",10,7,340,0],
+    ], columns=["time","topic","mentions","unique_accounts","engagement","influencer_event"])
+    return tokens, trades, x
 
-def calculate(df):
-    d=df.copy()
-    d["time"]=pd.to_datetime(d["time"],errors="coerce",utc=True)
-    d=d.dropna(subset=["time"]).sort_values(["topic","time"]).reset_index(drop=True)
-    for c in REQUIRED[2:]:
-        d[c]=pd.to_numeric(d[c],errors="coerce").fillna(0).clip(lower=0)
-    g=d.groupby("topic")
-    d["mention_velocity"]=g["mentions"].diff().fillna(0)
-    d["mention_acceleration"]=g["mention_velocity"].diff().fillna(0)
-    d["unique_velocity"]=g["unique_accounts"].diff().fillna(0)
-    d["unique_acceleration"]=g["unique_velocity"].diff().fillna(0)
-    d["engagement_growth"]=g["engagement"].pct_change().replace([np.inf,-np.inf],np.nan).fillna(0)
-    d["baseline"]=g["mentions"].transform(lambda s:s.shift(1).rolling(4,min_periods=3).mean())
-    d["baseline_std"]=g["mentions"].transform(lambda s:s.shift(1).rolling(4,min_periods=3).std()).fillna(0)
-    d["anomaly"]=((d["mentions"]-d["baseline"])/d["baseline_std"].replace(0,np.nan)).replace([np.inf,-np.inf],np.nan).fillna(0)
-    d["accel_c"]=g["mention_acceleration"].transform(norm)
-    d["vel_c"]=g["mention_velocity"].transform(norm)
-    d["unique_accel_c"]=g["unique_acceleration"].transform(norm)
-    d["eng_c"]=g["engagement_growth"].transform(norm)
-    d["anomaly_c"]=d["anomaly"].clip(0,5)/5*100
-    d["influencer_c"]=d["influencer_event"].clip(0,1)*100
-    raw=.32*d["accel_c"]+.20*d["vel_c"]+.16*d["unique_accel_c"]+.12*d["anomaly_c"]+.12*d["eng_c"]+.08*d["influencer_c"]
-    d["score"]=(raw*(1+.12/(1+np.log1p(d["mentions"])))).clip(0,100)
-    d["signals"]=((d["mention_acceleration"]>0).astype(int)+(d["unique_acceleration"]>0).astype(int)+(d["engagement_growth"]>.15).astype(int)+(d["anomaly"]>1.5).astype(int)+(d["influencer_event"]>0).astype(int))
-    d["quality"]=np.select([d["signals"]>=4,d["signals"]>=3,d["signals"]>=2],["STRONG","GOOD","WEAK"],default="LOW")
-    d["stage"]=np.select([(d["mentions"]<=30)&(d["mention_acceleration"]>0),(d["mentions"]<=100)&(d["mention_acceleration"]>0),d["mention_acceleration"]>0],["EARLY","GROWING","LATE"],default="QUIET")
-    d["alert"]=np.select([(d["score"]>=70)&d["quality"].isin(["STRONG","GOOD"]),d["score"]>=50,d["score"]>=30],["EARLY WAVE","WATCH","BUILDING"],default="NORMAL")
-    return d
+# ---------------- Sidebar ----------------
+st.sidebar.header("Data Source")
+mode = st.sidebar.radio("Mode", ["Demo", "Upload CSVs"])
 
-st.sidebar.header("V1.6 Data Pipeline")
-mode=st.sidebar.radio("Input mode",["Demo aggregated data","Upload aggregated CSV","Upload raw event CSV"])
-uploaded=None
-if mode=="Upload aggregated CSV":
-    uploaded=st.sidebar.file_uploader("Upload aggregated CSV",type=["csv"],key="a")
-elif mode=="Upload raw event CSV":
-    uploaded=st.sidebar.file_uploader("Upload raw events CSV",type=["csv"],key="r")
+st.sidebar.header("Safety thresholds")
+min_liq = st.sidebar.number_input("Minimum liquidity ($)", min_value=0.0, value=50000.0, step=5000.0)
+min_lock = st.sidebar.number_input("Minimum LP lock days", min_value=0, value=30, step=1)
+max_top10 = st.sidebar.number_input("Maximum top-10 holder %", min_value=0.0, max_value=100.0, value=40.0)
+max_dev = st.sidebar.number_input("Maximum dev holder %", min_value=0.0, max_value=100.0, value=10.0)
+max_cluster = st.sidebar.number_input("Maximum related-cluster %", min_value=0.0, max_value=100.0, value=50.0)
 
-if mode=="Demo aggregated data":
-    raw=demo_data(); label="Synthetic demo"
-elif uploaded is None:
-    st.info("Upload a CSV file to begin."); st.stop()
+if mode == "Demo":
+    tokens, trades, x = demo_data()
 else:
-    incoming=pd.read_csv(uploaded)
-    try:
-        raw=aggregate_events(incoming) if mode=="Upload raw event CSV" else incoming
-        label="Raw events automatically aggregated" if mode=="Upload raw event CSV" else "Uploaded aggregated data"
-    except Exception as e:
-        st.error(str(e)); st.stop()
+    token_file = st.sidebar.file_uploader("Token safety CSV", type=["csv"])
+    trade_file = st.sidebar.file_uploader("Trader trades CSV", type=["csv"])
+    x_file = st.sidebar.file_uploader("X attention CSV", type=["csv"])
 
-missing=[c for c in REQUIRED if c not in raw.columns]
-if missing:
-    st.error("Missing columns: "+", ".join(missing)); st.stop()
+    if not token_file or not trade_file:
+        st.info("Upload at least Token Safety CSV and Trader Trades CSV. X CSV is optional.")
+        st.stop()
 
-result=calculate(raw)
-latest=result.sort_values("time").groupby("topic",as_index=False).tail(1).sort_values("score",ascending=False).reset_index(drop=True)
+    tokens = pd.read_csv(token_file)
+    trades = pd.read_csv(trade_file)
+    x = pd.read_csv(x_file) if x_file else pd.DataFrame()
 
-st.subheader("Pipeline Status")
-a,b,c,d=st.columns(4)
-a.metric("Input",label); b.metric("Topics",len(latest)); c.metric("Rows",len(result)); d.metric("Calculated",datetime.now(timezone.utc).strftime("%H:%M:%S UTC"))
+# ---------------- Processing ----------------
+safety = safety_gate(
+    tokens,
+    min_liquidity=min_liq,
+    min_lp_lock_days=min_lock,
+    max_top10=max_top10,
+    max_dev=max_dev,
+    max_cluster=max_cluster,
+)
 
-st.markdown("**Architecture:** Authorized collector → Raw events → Hourly aggregation → Detection engine → Ranked alerts")
+traders = trader_scores(trades)
+convergence = trader_convergence(trades, traders)
+dev = dev_history(safety)
 
-st.subheader("Early Attention Watchlist")
-watch=latest[["topic","score","quality","stage","alert","mentions","mention_velocity","mention_acceleration","anomaly","signals"]].copy()
-watch["score"]=watch["score"].round(1); watch["anomaly"]=watch["anomaly"].round(2)
-st.dataframe(watch,use_container_width=True,hide_index=True)
-
-st.subheader("Active Alert Queue")
-alerts=latest[latest["alert"]!="NORMAL"]
-if alerts.empty: st.success("No active alerts.")
+if not x.empty:
+    attention = calculate_attention(x)
 else:
-    for _,r in alerts.iterrows():
-        st.warning(f"{r['alert']} | {r['topic']} | Score {r['score']:.1f} | {r['quality']} | {r['stage']}")
+    attention = pd.DataFrame(columns=["topic","attention_score","stage","alert"])
 
-selected=st.selectbox("Inspect topic",latest["topic"].astype(str).tolist())
-view=result[result["topic"].astype(str)==selected]
-last=view.iloc[-1]
-st.subheader(f"Topic Inspector — {selected}")
-a,b,c,d,e=st.columns(5)
-a.metric("Score",f"{last['score']:.1f}/100"); b.metric("Velocity",f"{last['mention_velocity']:.1f}"); c.metric("Acceleration",f"{last['mention_acceleration']:.1f}"); d.metric("Anomaly",f"{last['anomaly']:.2f}σ"); e.metric("Signals",f"{last['signals']}/5")
-st.write(f"**Stage:** {last['stage']} | **Quality:** {last['quality']} | **Alert:** {last['alert']}")
-st.line_chart(view.set_index("time")[["vel_c","accel_c","unique_accel_c","anomaly_c"]])
-st.markdown("### Mentions vs baseline")
-st.line_chart(view.set_index("time")[["mentions","baseline"]])
+signals = build_signal(safety, traders, convergence, dev, attention)
 
-with st.expander("Input formats"):
-    st.markdown("""**Aggregated CSV:** `time, topic, mentions, unique_accounts, engagement, influencer_event`
+# ---------------- Overview ----------------
+st.subheader("1. Unified Signal Board")
 
-**Raw event CSV minimum:** `time, topic`
+if signals.empty:
+    st.info("No signals available.")
+else:
+    display_cols = [
+        c for c in [
+            "token","safety_status","safety_score","elite_buyers","convergence_score",
+            "dev_score","attention_score","unified_score","signal","reasons"
+        ] if c in signals.columns
+    ]
+    st.dataframe(signals[display_cols], use_container_width=True)
 
-Recommended raw columns: `author_id, engagement, influencer_event`
+# ---------------- Safety ----------------
+st.subheader("2. Safety Gate")
+st.caption("Safety is a hard gate. FAILED and UNVERIFIED tokens cannot generate an ALERT.")
 
-Raw events are automatically grouped into hourly topic metrics.""")
+safety_cols = [
+    c for c in [
+        "token","status","score","liquidity_usd","lp_locked","lp_lock_days",
+        "mint_authority_active","freeze_authority_active","sellable",
+        "top10_holder_pct","dev_holder_pct","cluster_holder_pct",
+        "wash_trade_risk","bundle_risk","dev_risk","contract_risk","reasons"
+    ] if c in safety.columns
+]
+st.dataframe(safety[safety_cols], use_container_width=True)
 
-agg_template=pd.DataFrame(columns=REQUIRED)
-raw_template=pd.DataFrame(columns=["time","topic","author_id","engagement","influencer_event"])
-st.download_button("Download aggregated CSV template",agg_template.to_csv(index=False).encode(),"aggregated_template.csv","text/csv")
-st.download_button("Download raw event CSV template",raw_template.to_csv(index=False).encode(),"raw_event_template.csv","text/csv")
-st.download_button("Download V1.6 demo data",demo_data().to_csv(index=False).encode(),"demo_v1_6.csv","text/csv")
+# ---------------- Traders ----------------
+st.subheader("3. Elite Early-Runner Traders")
+st.dataframe(traders, use_container_width=True)
 
-st.subheader("What V1.6 adds")
-st.markdown("""- Raw event input mode
-- Automatic hourly aggregation
-- Aggregated-data input mode
-- Collector-ready pipeline architecture
-- Same detector can work behind a future authorized data source
+st.subheader("4. Trader Convergence")
+if convergence.empty:
+    st.info("No convergence detected.")
+else:
+    st.dataframe(convergence, use_container_width=True)
 
-This prototype does not scrape X, bypass access controls, or execute trades.""")
+# ---------------- Dev ----------------
+st.subheader("5. Dev / Associated Wallet Intelligence")
+st.dataframe(dev, use_container_width=True)
+
+# ---------------- X ----------------
+st.subheader("6. X Attention")
+if attention.empty:
+    st.info("X attention data is not supplied. The system can still operate using on-chain/trader signals.")
+else:
+    st.dataframe(attention, use_container_width=True)
+    if "topic" in attention.columns and "attention_score" in attention.columns:
+        chart = attention[["topic","attention_score"]].set_index("topic")
+        st.bar_chart(chart)
+
+# ---------------- How it works ----------------
+with st.expander("How V2.0 decides"):
+    st.markdown("""
+**Step 1 — Safety Gate**
+- Liquidity
+- LP lock and duration
+- Mint/freeze authority
+- Holder concentration
+- Dev concentration
+- Related-wallet/cluster concentration
+- Sellability
+- Wash-trading and bundle-risk fields
+- Dev and contract risk
+
+**Step 2 — Elite Trader Detection**
+The system scores wallets using historical early-runner behavior, runner/win history, consistency, and activity volume.
+
+**Step 3 — Convergence**
+Multiple independently behaving high-score wallets buying the same token in a short window can create a convergence signal.
+
+**Step 4 — Dev Intelligence**
+Historical dev-associated behavior is separated from the opportunity score.
+
+**Step 5 — X Attention**
+Attention velocity and acceleration are measured when authorized X data is supplied.
+
+**Step 6 — Unified Signal**
+A token must pass the Safety Gate first. Only then can trader convergence, dev history and X attention raise the opportunity score.
+""")
+
+with st.expander("CSV schemas"):
+    st.markdown("""
+### Token Safety CSV
+Required:
+`token, liquidity_usd, lp_locked, lp_lock_days, mint_authority_active, freeze_authority_active, sellable, top10_holder_pct, dev_holder_pct, cluster_holder_pct`
+
+Recommended:
+`wash_trade_risk, bundle_risk, dev_risk, contract_risk`
+
+### Trader Trades CSV
+Required:
+`wallet, time, token, side, usd`
+
+Recommended historical labels:
+`early_runner, win`
+
+### X Attention CSV
+`time, topic, mentions, unique_accounts, engagement, influencer_event`
+
+These are data inputs. V2.0 does **not** pretend that an uploaded field is independently verified.
+""")
