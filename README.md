@@ -1,53 +1,13 @@
-# Early Runner Intelligence V2.1
+# Early Runner Intelligence v2.2
 
-V2.1 adds a **real Solana JSON-RPC data adapter** to V2.0.
+V2.2 adds a live Solana wallet scanner, wallet intelligence, token-balance heuristics, wallet convergence, and a unified safety/X/convergence signal board.
 
-## Live capability
+Run:
+`pip install -r requirements.txt`
+`streamlit run app.py`
 
-Enter a Solana token mint and an RPC endpoint. The app queries:
-- `getAccountInfo` with parsed data
-- `getTokenSupply`
-- `getTokenLargestAccounts`
+The wallet scanner uses Solana RPC transaction history. Solana documents `getSignaturesForAddress` as returning confirmed transaction signatures and `getTransaction` as returning confirmed transaction details.
 
-Solana documents these RPC account/token methods and their returned structures. The adapter uses the public RPC interface rather than scraping a trading terminal.
+Important: LIKELY BUY/SELL are balance-change heuristics, not guaranteed DEX trades and not exact PnL. Public RPC alone cannot prove LP locks, sellability, holder relationships, wash trading, bundle/sniper certainty, or other unavailable checks. Unknown critical safety data remains UNVERIFIED. PASSED is not a guarantee of safety or profitability.
 
-## What V2.1 does NOT claim
-
-The basic RPC snapshot does not automatically prove:
-- liquidity amount
-- LP lock status/duration
-- sellability/honeypot status
-- wallet relationships / BubbleMaps-style clusters
-- wash trading
-- bundle/sniper behavior
-- historical dev performance
-- trader profitability
-
-Those need additional indexed/on-chain or specialized data sources.
-
-## Safety philosophy
-
-Missing critical data = **FAILED / BLOCKED**.
-
-A `PASSED` status means the configured checks passed; it never means the token is guaranteed safe or profitable.
-
-## Run
-
-```bash
-pip install -r requirements.txt
-streamlit run app.py
-```
-
-## Next target: V2.2
-
-The next build should add a proper indexed Solana transaction layer:
-1. token creation/deployer history
-2. wallet transaction history
-3. first-entry timing
-4. holder concentration over time
-5. DEX liquidity/pool discovery
-6. buy/sell flow and unique buyers
-7. bundle/sniper heuristics
-8. reusable wallet reputation database
-9. persistent scoring/history
-10. alerts
+Never enter a seed phrase or private key. This project does not sign or execute trades.
