@@ -1,0 +1,4 @@
+wallet,token,time,classification,token_delta,sol_change
+RunnerA,DEMO1,2026-09-05 10:06,LIKELY BUY,100000,-1.2
+RunnerB,DEMO1,2026-09-05 10:08,LIKELY BUY,75000,-0.9
+RunnerC,DEMO1,2026-09-05 10:12,LIKELY BUY,50000,-0.6
